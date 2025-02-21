@@ -1,0 +1,283 @@
+# ShadowPot
+创建一个蜜罐（Honeypot）服务是一个非常有趣且具有挑战性的项目！蜜罐是一种网络安全技术，用于吸引、检测和研究攻击者的行为。以下是一个实现蜜罐服务的步骤指南，包括后端用 Go 实现和前端展示的部分。
+
+---
+
+### 1. **项目设计**
+在开始编码之前，先明确项目的整体架构和功能需求：
+
+#### 后端（Go）
+- 监听多个常用端口（如 21, 22, 80, 443 等）。
+- 模拟常见服务（如 FTP、SSH、HTTP）以吸引攻击者。
+- 记录所有连接尝试的详细信息（来源 IP、时间戳、请求内容等）。
+- 提供一个简单的 API，将数据传递给前端。
+
+#### 前端
+- 显示实时连接日志。
+- 用图表展示攻击频率、地理分布等信息。
+- 提供搜索和筛选功能，方便分析历史数据。
+
+---
+
+### 2. **后端实现（Go）**
+
+#### 2.1 监听服务
+我们可以为每个常用端口创建一个监听器，并模拟相应协议的服务。以下是一个简单的示例：
+
+```go
+package main
+
+import (
+    "fmt"
+    "net"
+    "time"
+)
+
+type Service struct {
+    port     int
+    protocol string
+    handler  func(conn net.Conn)
+}
+
+func NewService(port int, protocol string, handler func(net.Conn)) *Service {
+    return &Service{
+        port:     port,
+        protocol: protocol,
+        handler:  handler,
+    }
+}
+
+func (s *Service) Start() error {
+    addr := fmt.Sprintf(":%d", s.port)
+    listener, err := net.Listen(s.protocol, addr)
+    if err != nil {
+        return err
+    }
+    defer listener.Close()
+
+    fmt.Printf("Listening on %s://%s\n", s.protocol, addr)
+    for {
+        conn, err := listener.Accept()
+        if err != nil {
+            continue
+        }
+        go s.handler(conn) // 处理连接，可以模拟服务或记录数据
+    }
+    return nil
+}
+
+func main() {
+    // 创建多个服务实例
+    services := []*Service{
+        NewService(21, "tcp", handleFTP),
+        NewService(22, "tcp", handleSSH),
+        NewService(80, "tcp", handleHTTP),
+    }
+
+    // 启动所有服务
+    for _, svc := range services {
+        go svc.Start()
+    }
+
+    select {}
+}
+
+// 示例处理函数：记录连接信息
+func handleFTP(conn net.Conn) {
+    defer conn.Close()
+
+    // 记录连接信息
+    logConnection(conn.RemoteAddr().String(), 21, "ftp")
+}
+
+func handleSSH(conn net.Conn) {
+    defer conn.Close()
+    logConnection(conn.RemoteAddr().String(), 22, "ssh")
+}
+
+func handleHTTP(conn net.Conn) {
+    defer conn.Close()
+    logConnection(conn.RemoteAddr().String(), 80, "http")
+}
+
+// 记录连接信息
+func logConnection(src string, port int, protocol string) {
+    fmt.Printf("[+] Connection from %s on %d/%s\n", src, port, protocol)
+}
+```
+
+#### 2.2 数据存储
+为了便于前端展示，我们需要将数据存储起来。可以使用简单的文件存储或数据库（如 SQLite、PostgreSQL）。
+
+```go
+type Log struct {
+    ID        int64     `json:"id"`
+    Timestamp string    `json:"timestamp"`
+    SrcIP     string    `json:"src_ip"`
+    Port      int       `json:"port"`
+    Protocol  string    `json:"protocol"`
+}
+
+func saveLog(log *Log) error {
+    // 实现存储逻辑，例如写入文件或数据库
+    return nil
+}
+```
+
+#### 2.3 提供 API
+为了让前端能够获取数据，我们需要创建一个简单的 HTTP 服务器：
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+// 获取所有日志的 API 端点
+func getLogs(w http.ResponseWriter, r *http.Request) {
+    // 从数据库或文件中读取日志
+    logs := []*Log{} // 假设这里读取了所有日志
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(logs)
+}
+
+func main() {
+    // 创建 HTTP 服务器
+    http.HandleFunc("/api/logs", getLogs)
+
+    fmt.Printf("Starting API server on :8080\n")
+    http.ListenAndServe(":8080", nil)
+}
+```
+
+---
+
+### 3. **前端实现**
+
+#### 3.1 技术选型
+- 使用 `Vue.js` 或 `React` 创建交互式界面。
+- 使用 `Chart.js` 或 `ECharts` 绘制图表。
+- 使用 `WebSocket` 实现实时更新。
+
+#### 3.2 示例代码（Vue.js）
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Honeypot Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div id="app">
+        <h1>Honeypot Activity</h1>
+        
+        <!-- 实时日志 -->
+        <div>
+            <h2>Recent Connections</h2>
+            <ul v-for="(log, index) in logs" :key="index">
+                <li>{{ log.src_ip }} connected to {{ log.port }}/{{ log.protocol }}</li>
+            </ul>
+        </div>
+
+        <!-- 图表 -->
+        <canvas id="activityChart"></canvas>
+    </div>
+
+    <script>
+        new Vue({
+            el: '#app',
+            data: {
+                logs: [],
+                chart: null
+            },
+            mounted() {
+                // 获取日志数据
+                axios.get('/api/logs')
+                    .then(response => {
+                        this.logs = response.data;
+                        this.initChart();
+                    });
+
+                // 实时更新（使用 WebSocket）
+                const ws = new WebSocket('ws://localhost:8081');
+                ws.onmessage = (event) => {
+                    this.logs.unshift(JSON.parse(event.data));
+                };
+            },
+            methods: {
+                initChart() {
+                    const ctx = document.getElementById('activityChart').getContext('2d');
+                    this.chart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: this.logs.map(log => log.timestamp),
+                            datasets: [{
+                                label: 'Connection Count',
+                                data: Array(this.logs.length).fill(1)
+                            }]
+                        }
+                    });
+                }
+            }
+        });
+    </script>
+</body>
+</html>
+```
+
+#### 3.3 WebSocket 实现
+为了让前端能够实时更新，可以在后端添加一个 WebSocket 端点：
+
+```go
+package main
+
+import (
+    "github.com/gorilla/websocket"
+)
+
+var upgrader = websocket.Upgrader{
+    ReadBufferSize:  1024,
+    WriteBufferSize: 1024,
+}
+
+func wsHandler(w http.ResponseWriter, r *http.Request) {
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        return
+    }
+    defer conn.Close()
+
+    for {
+        // 接收日志数据并广播给所有客户端
+        select {
+            case log := <-logChan:
+                conn.WriteJSON(log)
+        }
+    }
+}
+
+func main() {
+    http.HandleFunc("/ws", wsHandler)
+    fmt.Printf("Starting WebSocket server on :8081\n")
+}
+```
+
+---
+
+### 4. 总结
+以上代码实现了以下功能：
+- 监听多个端口（21, 22, 80），记录连接信息。
+- 提供 HTTP API 访问日志数据。
+- 使用 WebSocket 实现实时更新。
+- 前端使用 Vue.js 和 Chart.js 展示数据。
+
+可以根据实际需求扩展功能，例如：
+- 添加用户认证
+- 支持更详细的日志分析
+- 集成威胁检测系统
